@@ -1,86 +1,44 @@
 # I rebuilt Netflix's billboard bandit. The metric picked the winner.
 
-## Greedy vs incremental, three bandit algorithms, and an offline test that lies on the wrong logs
+## Greedy vs incremental, three bandit algorithms, and an offline test that misleads on the wrong logs
 
-*Part 2 of **Netflix Tech Blog, rebuilt**. [Part 1: artwork personalization](https://medium.com/@faycal.zouine.usa/i-rebuilt-netflixs-artwork-personalization-system-on-movielens-here-s-what-actually-matters-d0540b7c43eb) · [Part 3: what recommendations are worth](https://medium.com/@faycal.zouine.usa/your-dashboard-says-recommendations-multiply-viewing-by-7-5-the-truth-is-3-1-a7b68e8334c3)*
+*Part 2 of Netflix Tech Blog, rebuilt. [Part 1: artwork personalization](https://medium.com/@faycal.zouine.usa/i-rebuilt-netflixs-artwork-personalization-system-on-movielens-here-s-what-actually-matters-d0540b7c43eb) · [Part 3: what recommendations are worth](https://medium.com/@faycal.zouine.usa/your-dashboard-says-recommendations-multiply-viewing-by-7-5-the-truth-is-3-1-a7b68e8334c3)*
 
-*5-minute read. In a hurry? Read the bold lines.*
+The big banner at the top of the Netflix homepage shows one title per member. Netflix described how they choose it in [a talk at AI Council](https://aicouncil.com/talks/a-multi-armed-bandit-framework-for-recommendations-at-netflix): a bandit that usually shows the title its model likes best and occasionally shows a random one from a candidate pool, so it keeps learning and collects clean data at the same time. I run an offer bandit at work, so I was curious how their choices would hold up in a setup where I could check them.
 
-Open Netflix and the top of the screen is one big title. The billboard. One slot, millions of members, and someone has to decide what goes there.
+The talk compares two ways of deciding which title is best. The first picks the title a member is most likely to play. The second picks the title whose chance of being played goes up the most because it is on the billboard. The difference matters more than it sounds. A big new release would probably get watched anyway, so putting it on the billboard mostly takes credit for a play that was already going to happen.
 
-Netflix fills it with a bandit (an algorithm that mostly shows its best guess and sometimes tries something random to keep learning). Their [talk](https://aicouncil.com/talks/a-multi-armed-bandit-framework-for-recommendations-at-netflix) compares two ways to define "best":
+## The setup
 
-- **Greedy:** the title you're most likely to play.
-- **Incrementality:** the title whose chance of being played goes up the most *because* it's on the billboard.
+I used about 890,000 MovieLens ratings to build a taste profile for every member and title, and wrote a small simulator for the plays, since no public dataset logs billboard impressions. One assumption in it matters a lot: lesser-known titles gain more from being shown than popular ones. I built that in because it is what Netflix's data suggests, which means my results can show the method picking up the pattern but can't prove the pattern is true. The benefit of simulating is that I know the true value of every policy, so I can grade the methods instead of just running them.
 
-Sounds like the same thing. It isn't.
+## The metric decided the winner
 
-You were going to watch the new blockbuster anyway. Putting it on the billboard just takes credit for it.
-
-> Being there when it happened is not the same as making it happen.
-
-I own an offer bandit at work, so this one is close to home. I rebuilt Netflix's setup on MovieLens and pushed on two things their talk leaves open.
-
-## What's real, what's simulated
-
-Real: 890k MovieLens ratings, turned into a taste profile for every member and title, plus title popularity.
-
-Simulated: the plays. No public dataset logs billboard impressions. So I wrote a small simulator with every assumption numbered. One matters a lot: lesser-known titles gain more from being shown. I built that in on purpose, because Netflix's data suggests it. **So I can show the method finds that pattern. I can't claim the pattern is true.**
-
-The upside of a simulator: I know the true answer for every policy. That's what lets me grade the methods later.
-
-## Result 1: the metric picks the winner
-
-Over 5 runs:
-
-- Greedy wins **take rate** (share of billboards that get played): 28.1% vs 22.9%.
-- Incrementality wins **extra plays** (plays that only happened because of the billboard): 0.158 vs 0.123 per visit. That's +28%.
-- Greedy sends 65% of billboards to the 5 most popular titles. Incrementality sends 26%.
+Over five runs, the first policy won on the share of billboards that got played, 28.1% against 22.9%. The second won on plays that only happened because of the billboard, 0.158 per visit against 0.123, which is 28% more. It also spread the billboard around. The first policy gave 65% of all billboards to the five most popular titles, the second gave them 26%.
 
 ![Greedy vs incrementality](https://raw.githubusercontent.com/ZFayFay/netflix-bandits-replication/main/figures/fig1_exploit_vs_incr.png)
 
-Netflix's offline test said greedy looked slightly better. Mine says the same, on take rate. Switch the metric to extra plays and the answer flips.
+Netflix's offline evaluation said the first policy looked slightly better, and mine said the same when I scored on play share. Switching the metric to incremental plays reversed the result. Anyone who has argued about last-touch attribution will recognize the pattern: whatever is present at the end gets the credit, whether or not it changed anything.
 
-Marketers have seen this movie. It's called last-touch attribution: credit goes to whatever was there at the end, even if the sale was already happening.
+## The result I almost believed
 
-**Pick the metric before you compare policies. Take rate and extra plays crown different winners.**
+The talk mentions Thompson sampling and UCB as future work, so I ran three bandit algorithms against each other over 20,000 visits: epsilon-greedy, LinUCB and Thompson sampling. With the standard textbook settings, Thompson sampling came out worst. That would have made a good contrarian post, and it would have been wrong.
 
-## Result 2: tuning beat the algorithm
-
-The talk lists Thompson sampling and UCB as future work. So I ran three bandits head to head for 20,000 visits: ε-greedy, LinUCB and Thompson sampling.
-
-With textbook settings, Thompson sampling came out *worst*. Great contrarian headline. Also wrong.
-
-Each method has one dial that controls how much it explores. When I tuned each dial fairly, on separate runs, all three finished within one standard deviation of each other: 769, 808 and 823 lost plays. All three beat random by more than 4×.
+Each of these methods has one setting that controls how much it explores. When I tuned that setting for each method on separate runs, all three finished within one standard deviation of each other, at 769, 808 and 823 lost plays, and all three beat random by more than four times. The gap I had seen came from the settings, not the algorithms.
 
 ![Online regret](https://raw.githubusercontent.com/ZFayFay/netflix-bandits-replication/main/figures/fig3_online_regret.png)
 
-**The lesson isn't "use Thompson." It's: never trust a bandit comparison that doesn't say how each one was tuned.**
+## Replay only works on random logs
 
-## Result 3: Netflix's offline test needs random logs
+Netflix grades new policies offline with a method called replay. You go through the logs, keep only the visits where the new policy would have chosen the same title the old one showed, and average the plays. That is fair when the logged titles were picked at random, which is how Netflix's exploration slice works. Most production logs aren't like that. They come from a system that mostly shows its favorite title, and replay then over-represents the members for whom the new policy happens to agree with the old one.
 
-Netflix grades new policies offline with replay. It's simple. Take the logs. Keep the rows where the new policy would have picked the same title. Average the plays.
-
-That's fair when the logs are random, like Netflix's exploration slice. But most real logs come from a bandit that mostly shows its favorite. Then replay over-counts the members where the new policy happens to agree with the old one.
-
-I graded five methods against the true answer, over 200 sets of logs:
-
-- **Replay:** 14% too high. And very consistent, so it looks precise while being wrong.
-- **IPS / SNIPS** (weight each result by 1 ÷ the odds it was shown): right on average, but ±20% noise.
-- **Direct method** (just ask a model): perfect with a good model, 52% too low with a crude one.
-- **Doubly robust** (direct method plus an IPS correction): right on average with *either* model.
+I tested five estimators against the known answer over 200 sets of logs. Replay came out 14% too high, and so consistently that it looked precise while being wrong. Inverse propensity scoring, which reweights each visit by how likely it was to be shown, was right on average but noisy, about ±20% at 5,000 visits. The direct method, which simply asks a model, was nearly perfect with a good model and 52% too low with a crude one. Doubly robust, which combines the two, was right on average with either model. It didn't reduce the noise much, because a play is a yes-or-no outcome and no model can remove that.
 
 ![Offline estimators](https://raw.githubusercontent.com/ZFayFay/netflix-bandits-replication/main/figures/fig4_ope.png)
 
-Doubly robust didn't cut the noise much here, though. A play is a yes-or-no coin flip, and no model removes that.
+## What I take from it
 
-**Replay only on random logs. Otherwise use doubly robust, and always log the odds.**
-
-## What to remember
-
-1. **Decide what "best" means first.** Take rate and extra plays pick different winners.
-2. **Tune before you compare.**
-3. **Know which offline test fits your logs.**
+The most useful thing in Netflix's talk isn't the algorithm. It is the choice between optimizing for plays and optimizing for plays you caused, and that choice has to be made before anyone compares policies. After that, I would tune every method before comparing them, and I would check what kind of logs I have before picking an offline test. If the logs aren't random, I would use doubly robust and make sure the serving system records the probability of each choice.
 
 ---
 
